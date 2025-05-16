@@ -1,94 +1,191 @@
-import streamlit as st
-import numpy as np
-import matplotlib.pyplot as plt
-from datetime import datetime
+// ======================
+// server.js (Backend)
+// ======================
 
-# Parametrlar
-kanallar_soni = 4
-kanal_sigimi = 10  # Gbps
-ocdma_samaradorligi = 0.8
-umumiy_sigim = kanallar_soni * kanal_sigimi
-samarali_sigim = umumiy_sigim * ocdma_samaradorligi
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const app = express();
 
-kategoriya_traffic = {
-    'Uy': (0.3, 1.2),
-    'Ofis': (1.0, 2.5),
-    'Korxona': (2.0, 4.0)
+app.use(cors());
+app.use(express.json());
+
+mongoose.connect('mongodb://localhost:27017/psycho_test', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+});
+
+const User = mongoose.model('User', {
+  name: String,
+  surname: String,
+  age: Number,
+  gender: String,
+  region: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Result = mongoose.model('Result', {
+  userId: mongoose.Schema.Types.ObjectId,
+  answers: [String],
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Admin = mongoose.model('Admin', {
+  username: String,
+  password: String
+});
+
+const SECRET_KEY = 'secret123';
+
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  const admin = await Admin.findOne({ username });
+  if (!admin || !(await bcrypt.compare(password, admin.password))) {
+    return res.status(401).json({ message: 'Invalid credentials' });
+  }
+  const token = jwt.sign({ id: admin._id }, SECRET_KEY, { expiresIn: '1h' });
+  res.json({ token });
+});
+
+function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.sendStatus(401);
+  try {
+    const decoded = jwt.verify(token, SECRET_KEY);
+    req.user = decoded;
+    next();
+  } catch {
+    res.sendStatus(403);
+  }
 }
 
-def prognoz_kunlik_oylik(trafik):
-    kunlik = np.sum(trafik) * 24
-    oylik = kunlik * 30
-    return kunlik, oylik
+app.get('/api/users', authMiddleware, async (req, res) => {
+  const users = await User.find();
+  res.json(users);
+});
 
-def bugungi_trafik(trafik):
-    soat = datetime.now().hour
-    return np.sum(trafik) * soat
+app.get('/api/results', authMiddleware, async (req, res) => {
+  const results = await Result.find().populate('userId');
+  res.json(results);
+});
 
-# --- Streamlit UI ---
-st.set_page_config(layout="wide")
-st.title("🔌 WDM/OCDMA PON Trafik Monitoring Paneli")
+app.post('/api/results', async (req, res) => {
+  const { userId, answers } = req.body;
+  const result = new Result({ userId, answers });
+  await result.save();
+  res.json({ success: true });
+});
 
-col1, col2 = st.columns(2)
+app.listen(5000, () => console.log('Server running on http://localhost:5000'));
 
-with col1:
-    kategoriya = st.radio("📶 Foydalanuvchi kategoriyasi", ['Uy', 'Ofis', 'Korxona'])
-with col2:
-    foydalanuvchi_soni = st.slider("👥 Foydalanuvchilar soni", 1, 50, 10)
 
-min_t, max_t = kategoriya_traffic[kategoriya]
-trafik = np.random.uniform(min_t, max_t, foydalanuvchi_soni)
-umumiy = np.sum(trafik)
-yuk = umumiy / samarali_sigim
-bugun = bugungi_trafik(trafik)
-kunlik, oylik = prognoz_kunlik_oylik(trafik)
+// ==================================
+// index.html (Frontend HTML layout)
+// ==================================
 
-# --- Grafiklar ---
-fig, (ax_bar, ax_pie, ax_trend) = plt.subplots(1, 3, figsize=(18, 6))
-plt.subplots_adjust(wspace=0.4)
+<!-- index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Psychology Test Admin Panel</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <h1>Admin Panel</h1>
 
-# Bar chart
-ax_bar.bar(range(1, foydalanuvchi_soni + 1), trafik, color='skyblue')
-ax_bar.axhline(y=kanal_sigimi, color='red', linestyle='--', label='Kanal chegarasi')
-ax_bar.set_title(f"{kategoriya} foydalanuvchilari trafik prognozi")
-ax_bar.set_xlabel("Foydalanuvchilar")
-ax_bar.set_ylabel("Soatlik trafik (Gbps)")
-ax_bar.grid(True)
-ax_bar.legend()
+  <input type="text" id="username" placeholder="Username">
+  <input type="password" id="password" placeholder="Password">
+  <button onclick="login()">Login</button>
 
-if foydalanuvchi_soni > 20:
-    ax_bar.text(0.5, 0.97, "⚠️ Foydalanuvchi soni 20 dan oshgan!", transform=ax_bar.transAxes,
-                fontsize=12, color='red', ha='center', bbox=dict(facecolor='white', alpha=0.8))
-if yuk > 1.0:
-    ax_bar.text(0.5, 0.92, "⚠️ Yuklama limitdan oshgan!", transform=ax_bar.transAxes,
-                fontsize=12, color='darkred', ha='center', bbox=dict(facecolor='white', alpha=0.8))
+  <h2>User Results</h2>
+  <table id="results-table">
+    <thead><tr><th>Name</th><th>Region</th><th>Age</th><th>Gender</th><th>Date</th></tr></thead>
+    <tbody></tbody>
+  </table>
 
-ax_bar.text(0.98, 0.95, f"🕒 Bugungi: {bugun:.2f} Gbps", transform=ax_bar.transAxes,
-            fontsize=10, va='top', ha='right', bbox=dict(facecolor='white', alpha=0.6))
-ax_bar.text(0.98, 0.88, f"📅 Kunlik: {kunlik:.2f} Gbps", transform=ax_bar.transAxes,
-            fontsize=10, va='top', ha='right', bbox=dict(facecolor='white', alpha=0.6))
-ax_bar.text(0.98, 0.81, f"🗓 Oylik: {oylik:.2f} Gbps", transform=ax_bar.transAxes,
-            fontsize=10, va='top', ha='right', bbox=dict(facecolor='white', alpha=0.6))
+  <h2>Region Stats</h2>
+  <canvas id="regions-chart"></canvas>
 
-# Pie chart
-labels = ['Trafik', 'Bo‘sh sig‘im']
-values = [umumiy, max(samarali_sigim - umumiy, 0)]
-colors = ['lightcoral', 'lightgreen'] if yuk <= 1 else ['red', 'grey']
-ax_pie.pie(values, labels=labels, autopct='%.1f%%', colors=colors, startangle=140)
-ax_pie.set_title("Tizim yuklanish holati")
+  <h2>Age Stats</h2>
+  <canvas id="ages-chart"></canvas>
 
-# Trend chizma
-foydalanuvchi_range = np.arange(1, 51)
-trend_yuklama = []
-for n in foydalanuvchi_range:
-    t = np.random.uniform(min_t, max_t, n)
-    trend_yuklama.append(np.sum(t) / samarali_sigim)
-ax_trend.plot(foydalanuvchi_range, trend_yuklama, color='purple')
-ax_trend.axhline(y=1.0, linestyle='--', color='red')
-ax_trend.set_title("Yuklama tendensiyasi")
-ax_trend.set_xlabel("Foydalanuvchilar soni")
-ax_trend.set_ylabel("Yuklama (n/samarali sig‘im)")
-ax_trend.grid(True)
+  <h2>Gender Stats</h2>
+  <canvas id="genders-chart"></canvas>
 
-# Grafikni chiqarish
-st.pyplot(fig)
+  <script src="script.js"></script>
+</body>
+</html>
+
+
+// ======================
+// script.js (Frontend JS)
+// ======================
+
+const API_BASE_URL = 'http://localhost:5000/api';
+
+let token = '';
+
+function login() {
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+
+  fetch(`${API_BASE_URL}/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  })
+  .then(res => res.json())
+  .then(data => {
+    if (data.token) {
+      token = data.token;
+      loadResults();
+    } else {
+      alert('Login failed');
+    }
+  });
+}
+
+function loadResults() {
+  fetch(`${API_BASE_URL}/results`, {
+    headers: { Authorization: `Bearer ${token}` }
+  })
+  .then(res => res.json())
+  .then(data => {
+    const table = document.querySelector('#results-table tbody');
+    table.innerHTML = '';
+
+    const regions = {}, ages = {}, genders = {};
+
+    data.forEach(r => {
+      const user = r.userId;
+      const row = `<tr><td>${user.name} ${user.surname}</td><td>${user.region}</td><td>${user.age}</td><td>${user.gender}</td><td>${new Date(r.createdAt).toLocaleDateString()}</td></tr>`;
+      table.innerHTML += row;
+
+      regions[user.region] = (regions[user.region] || 0) + 1;
+      ages[user.age] = (ages[user.age] || 0) + 1;
+      genders[user.gender] = (genders[user.gender] || 0) + 1;
+    });
+
+    drawChart('regions-chart', 'Users by Region', regions);
+    drawChart('ages-chart', 'Users by Age', ages);
+    drawChart('genders-chart', 'Users by Gender', genders);
+  });
+}
+
+function drawChart(canvasId, label, data) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: Object.keys(data),
+      datasets: [{
+        label: label,
+        data: Object.values(data),
+        backgroundColor: 'rgba(54, 162, 235, 0.5)'
+      }]
+    }
+  });
+}
